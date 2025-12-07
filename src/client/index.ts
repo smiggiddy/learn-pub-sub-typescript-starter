@@ -6,11 +6,56 @@ import {
   commandStatus,
   printQuit,
 } from "../internal/gamelogic/gamelogic.js";
-import { GameState } from "../internal/gamelogic/gamestate.js";
-import { commandMove } from "../internal/gamelogic/move.js";
+import {
+  GameState,
+  type PlayingState,
+} from "../internal/gamelogic/gamestate.js";
+import {
+  commandMove,
+  handleMove,
+  MoveOutcome,
+} from "../internal/gamelogic/move.js";
+import { handlePause } from "../internal/gamelogic/pause.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
-import { declareAndBind } from "../internal/pubsub/api.js";
-import { PauseKey } from "../internal/routing/routing.js";
+import {
+  AckType,
+  declareAndBind,
+  publishJSON,
+  subscribeJSON,
+} from "../internal/pubsub/api.js";
+import {
+  ArmyMovesPrefix,
+  ExchangePerilDirect,
+  ExchangePerilTopic,
+  PauseKey,
+} from "../internal/routing/routing.js";
+
+import type { ArmyMove, Player } from "../internal/gamelogic/gamedata.js";
+
+function handlerPause(gs: GameState): (ps: PlayingState) => AckType {
+  return (ps: PlayingState) => {
+    handlePause(gs, ps);
+    process.stdout.write("> ");
+    return AckType.Ack;
+  };
+}
+
+function handlerMove(gs: GameState): (ps: PlayingState) => AckType {
+  return (move: ArmyMove): AckType => {
+    try {
+      const outcome = handleMove(gs, move);
+      switch (outcome) {
+        case MoveOutcome.Safe:
+        case MoveOutcome.MakeWar:
+          return AckType.Ack;
+        default:
+          return AckType.NackDiscard;
+      }
+    } finally {
+      process.stdout.write("> ");
+    }
+  };
+}
 
 async function main() {
   const rabbitConnString =
@@ -20,26 +65,45 @@ async function main() {
   console.log("Starting Peril client...");
 
   const conn = await amqp.connect(rabbitConnString);
+  const ch = await conn.createConfirmChannel();
   const username = await clientWelcome();
 
-  try {
-    declareAndBind(
-      conn,
-      "peril_direct",
-      `pause.${username}`,
-      PauseKey,
-      "transient",
-    );
-  } catch (err) {
-    console.error(`Error creating queue`);
-  }
   const gs = new GameState(username);
 
   let stopGame = false;
 
+  try {
+    await declareAndBind(
+      conn,
+      ExchangePerilTopic,
+      `${ArmyMovesPrefix}.${username}`,
+      `${ArmyMovesPrefix}.*`,
+      "transient",
+    );
+  } catch (err) {
+    console.error(`Error creating queue`, err);
+  }
+  await subscribeJSON(
+    conn,
+    ExchangePerilTopic,
+    `${ArmyMovesPrefix}.${username}`,
+    `${ArmyMovesPrefix}.*`,
+    "transient",
+    handlerMove(gs),
+  );
+  await subscribeJSON(
+    conn,
+    ExchangePerilDirect,
+    `${PauseKey}.${username}`,
+    PauseKey,
+    "transient",
+    handlerPause(gs),
+  );
+
   while (!stopGame) {
-    printClientHelp();
+    // printClientHelp();
     const input = await getInput();
+
     switch (input[0]) {
       case "spawn":
         try {
@@ -49,11 +113,14 @@ async function main() {
         }
         continue;
       case "move":
-        try {
-          commandMove(gs, input);
-        } catch (err) {
-          console.log(err);
-        }
+        const move = commandMove(gs, input);
+        publishJSON(
+          ch,
+          ExchangePerilTopic,
+          `${ArmyMovesPrefix}.${username}`,
+          move,
+        );
+        handlerMove(gs);
         continue;
       case "status":
         commandStatus(gs);

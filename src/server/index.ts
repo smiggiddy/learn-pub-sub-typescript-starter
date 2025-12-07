@@ -36,7 +36,7 @@ async function main() {
   await channel.assertExchange(ExchangePerilTopic, "topic");
 
   try {
-    declareAndBind(
+    await declareAndBind(
       conn,
       ExchangePerilTopic,
       "game_logs",
@@ -44,7 +44,7 @@ async function main() {
       "durable",
     );
   } catch (err) {
-    console.error(`Error creating queue`);
+    console.error(`Error creating queue`, err);
   }
 
   printServerHelp();
