@@ -1,4 +1,4 @@
-import amqp from "amqplib";
+import amqp, { type ConfirmChannel } from "amqplib";
 import {
   clientWelcome,
   getInput,
@@ -28,9 +28,11 @@ import {
   ExchangePerilDirect,
   ExchangePerilTopic,
   PauseKey,
+  WarRecognitionsPrefix,
 } from "../internal/routing/routing.js";
 
-import type { ArmyMove, Player } from "../internal/gamelogic/gamedata.js";
+import type { ArmyMove, Player, RecognitionOfWar } from "../internal/gamelogic/gamedata.js";
+import { handleWar, WarOutcome } from "../internal/gamelogic/war.js";
 
 function handlerPause(gs: GameState): (ps: PlayingState) => AckType {
   return (ps: PlayingState) => {
@@ -40,14 +42,57 @@ function handlerPause(gs: GameState): (ps: PlayingState) => AckType {
   };
 }
 
-function handlerMove(gs: GameState): (ps: PlayingState) => AckType {
-  return (move: ArmyMove): AckType => {
+function handlerWar(gs: GameState): (ps: PlayingState) => AckType {
+  return async (war: RecognitionOfWar): AckType => {
+    try {
+      const outcome = handleWar(gs, war);
+      switch (outcome.result) {
+        case WarOutcome.NotInvolved:
+          return AckType.NackRequeue;
+        case WarOutcome.NoUnits:
+          return AckType.NackDiscard;
+        case WarOutcome.OpponentWon:
+        case WarOutcome.YouWon:
+        case WarOutcome.Draw:
+          return AckType.Ack
+      }
+
+    } catch (err) {
+      console.log(`Some error happend ${err}`)
+    } finally {
+      process.stdout.write("> ");
+    }
+
+  }
+}
+
+function handlerMove(gs: GameState, ch: ConfirmChannel): (ps: PlayingState) => AckType {
+  return async (move: ArmyMove): Promise<AckType> => {
     try {
       const outcome = handleMove(gs, move);
       switch (outcome) {
         case MoveOutcome.Safe:
-        case MoveOutcome.MakeWar:
           return AckType.Ack;
+        case MoveOutcome.MakeWar:
+          const recongition: RecognitionOfWar = {
+            attacker: move.player,
+            defender: gs.getPlayerSnap()
+          }
+
+          try {
+            await publishJSON(
+              ch,
+              ExchangePerilTopic,
+              `${WarRecognitionsPrefix}.${gs.getUsername()}`,
+              recongition,
+            );
+            return AckType.Ack;
+
+          } catch (err) {
+            console.error("Error publishing war recognition", err)
+            return AckType.NackRequeue;
+          }
+
         default:
           return AckType.NackDiscard;
       }
@@ -80,6 +125,13 @@ async function main() {
       `${ArmyMovesPrefix}.*`,
       "transient",
     );
+    await declareAndBind(
+      conn,
+      ExchangePerilTopic,
+      `${WarRecognitionsPrefix}`,
+      `${WarRecognitionsPrefix}.*`,
+      "durable",
+    );
   } catch (err) {
     console.error(`Error creating queue`, err);
   }
@@ -89,7 +141,16 @@ async function main() {
     `${ArmyMovesPrefix}.${username}`,
     `${ArmyMovesPrefix}.*`,
     "transient",
-    handlerMove(gs),
+    handlerMove(gs, ch),
+  );
+
+  await subscribeJSON(
+    conn,
+    ExchangePerilTopic,
+    `${WarRecognitionsPrefix}`,
+    `${WarRecognitionsPrefix}.*`,
+    "durable",
+    handlerWar(gs),
   );
   await subscribeJSON(
     conn,
@@ -120,6 +181,7 @@ async function main() {
           `${ArmyMovesPrefix}.${username}`,
           move,
         );
+
 
         continue;
       case "status":

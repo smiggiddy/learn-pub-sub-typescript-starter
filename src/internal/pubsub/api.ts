@@ -67,7 +67,7 @@ export async function subscribeJSON<T>(
   queueName: string,
   key: string,
   queueType: SimpleQueueType, // an enum to represent "durable" or "transient"
-  handler: (data: T) => AckType,
+  handler: (data: T) => Promise<AckType> | AckType,
 ): Promise<void> {
   let ch: amqp.ChannelModel;
 
@@ -83,12 +83,12 @@ export async function subscribeJSON<T>(
   } catch (err) {
     console.error(err);
   }
-  await ch.consume(queue, (message: amqp.ConsumeMessage | null) => {
+  await ch.consume(queue, async (message: amqp.ConsumeMessage | null) => {
     if (!message) return;
 
     const buf = message.content.toString("utf8");
     const json = JSON.parse(buf);
-    const result = handler(json);
+    const result = await handler(json);
 
     switch (result) {
       case AckType.Ack:
