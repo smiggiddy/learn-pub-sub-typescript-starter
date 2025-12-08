@@ -120,7 +120,7 @@ async function main() {
           `${ArmyMovesPrefix}.${username}`,
           move,
         );
-        handlerMove(gs);
+
         continue;
       case "status":
         commandStatus(gs);

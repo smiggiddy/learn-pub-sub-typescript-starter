@@ -1,4 +1,5 @@
 import type { ConfirmChannel } from "amqplib";
+import { ExchangePerilDlq } from "../routing/routing.js";
 
 export enum AckType {
   Ack,
@@ -40,11 +41,11 @@ export async function declareAndBind(
 ): Promise<[Channel, amqp.Replies.AssertQueue]> {
   const ch = await conn.createConfirmChannel();
   return new Promise(async (resolve, reject) => {
-    const options =
+    let options =
       queueType === "durable"
-        ? { durable: true, arguments: {} }
+        ? { durable: true, arguments: { deadLetterExchange: ExchangePerilDlq } }
         : queueType === "transient"
-          ? { durable: false, autoDelete: true, exclusive: true, arguments: {} }
+          ? { durable: false, autoDelete: true, exclusive: true, arguments: { 'x-dead-letter-exchange': ExchangePerilDlq, 'x-dead-letter-routing-key': queueName } }
           : null;
     const queue = ch.assertQueue(queueName, options, (err) => {
       if (err !== null) {
@@ -82,7 +83,7 @@ export async function subscribeJSON<T>(
   } catch (err) {
     console.error(err);
   }
-  return ch.consume(queue, (message: amqp.ConsumeMessage) => {
+  await ch.consume(queue, (message: amqp.ConsumeMessage | null) => {
     if (!message) return;
 
     const buf = message.content.toString("utf8");
@@ -92,18 +93,23 @@ export async function subscribeJSON<T>(
     switch (result) {
       case AckType.Ack:
         ch.ack(message);
-        console.log("Ack");
+        process.stdout.write("Ack\n");
+        process.stdout.write("> ");
         break;
       case AckType.NackDiscard:
         ch.nack(message, false, false);
-        console.log("discarding message failed nack");
+        process.stdout.write("discarding message failed nack\n");
+        process.stdout.write("> ");
         break;
       case AckType.NackRequeue:
         ch.nack(message, false, true);
-        console.log("nack, requeuing message");
+        process.stdout.write("nack, requeuing message\n");
+        process.stdout.write("> ");
         break;
       default:
         console.log("something went wrong with this");
+        process.stdout.write("> ");
+        return
     }
   });
 }
