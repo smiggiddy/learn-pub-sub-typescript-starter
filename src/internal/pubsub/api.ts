@@ -1,4 +1,5 @@
 import type { ConfirmChannel } from "amqplib";
+import { encode } from "@msgpack/msgpack";
 import { ExchangePerilDlq } from "../routing/routing.js";
 
 export enum AckType {
@@ -6,6 +7,33 @@ export enum AckType {
   NackDiscard,
   NackRequeue,
 }
+
+export function publishMsgPack<T>(
+  ch: ConfirmChannel,
+  exchange: string,
+  routingKey: string,
+  value: T,
+): Promise<void> {
+
+  const encoded: Uint8Array = encode(value)
+  const buff = Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+  return new Promise((resolve, reject) => {
+    ch.publish(
+      exchange,
+      routingKey,
+      buff,
+      { contentType: "application/x-msgpack" },
+      (err) => {
+        if (err !== null) {
+          reject(new Error(`Rabbit MQ Message ${err}`));
+        } else {
+          resolve();
+        }
+      },
+    );
+  });
+
+};
 
 export function publishJSON<T>(
   ch: ConfirmChannel,
