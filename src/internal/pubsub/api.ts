@@ -14,9 +14,12 @@ export function publishMsgPack<T>(
   routingKey: string,
   value: T,
 ): Promise<void> {
-
-  const encoded: Uint8Array = encode(value)
-  const buff = Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+  const encoded: Uint8Array = encode(value);
+  const buff = Buffer.from(
+    encoded.buffer,
+    encoded.byteOffset,
+    encoded.byteLength,
+  );
   return new Promise((resolve, reject) => {
     ch.publish(
       exchange,
@@ -32,8 +35,7 @@ export function publishMsgPack<T>(
       },
     );
   });
-
-};
+}
 
 export function publishJSON<T>(
   ch: ConfirmChannel,
@@ -73,7 +75,15 @@ export async function declareAndBind(
       queueType === "durable"
         ? { durable: true, arguments: { deadLetterExchange: ExchangePerilDlq } }
         : queueType === "transient"
-          ? { durable: false, autoDelete: true, exclusive: true, arguments: { 'x-dead-letter-exchange': ExchangePerilDlq, 'x-dead-letter-routing-key': queueName } }
+          ? {
+              durable: false,
+              autoDelete: true,
+              exclusive: true,
+              arguments: {
+                "x-dead-letter-exchange": ExchangePerilDlq,
+                "x-dead-letter-routing-key": queueName,
+              },
+            }
           : null;
     const queue = ch.assertQueue(queueName, options, (err) => {
       if (err !== null) {
@@ -121,23 +131,17 @@ export async function subscribeJSON<T>(
     switch (result) {
       case AckType.Ack:
         ch.ack(message);
-        process.stdout.write("Ack\n");
-        process.stdout.write("> ");
         break;
       case AckType.NackDiscard:
         ch.nack(message, false, false);
-        process.stdout.write("discarding message failed nack\n");
-        process.stdout.write("> ");
         break;
       case AckType.NackRequeue:
         ch.nack(message, false, true);
-        process.stdout.write("nack, requeuing message\n");
-        process.stdout.write("> ");
         break;
       default:
         console.log("something went wrong with this");
         process.stdout.write("> ");
-        return
+        return;
     }
   });
 }
