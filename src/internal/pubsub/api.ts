@@ -1,11 +1,16 @@
 import type { ConfirmChannel } from "amqplib";
-import { encode } from "@msgpack/msgpack";
+import { encode, decode } from "@msgpack/msgpack";
 import { ExchangePerilDlq } from "../routing/routing.js";
 
 export enum AckType {
   Ack,
   NackDiscard,
   NackRequeue,
+}
+
+export enum SimpleQueueType {
+  "durable",
+  "transient",
 }
 
 export function publishMsgPack<T>(
@@ -107,6 +112,36 @@ export async function subscribeJSON<T>(
   queueType: SimpleQueueType, // an enum to represent "durable" or "transient"
   handler: (data: T) => Promise<AckType> | AckType,
 ): Promise<void> {
+  await subscribe(conn, exchange, queueName, key, queueType, handler, (d) => {
+    const data = d.toString("utf8");
+    return JSON.parse(data);
+  });
+}
+
+export async function subsribeMsgPack<T>(
+  conn: amqp.ChannelModel,
+  exchange: string,
+  queueName: string,
+  key: string,
+  queueType: SimpleQueueType, // an enum to represent "durable" or "transient"
+  handler: (data: T) => Promise<AckType> | AckType,
+): Promise<void> {
+  await subscribe(conn, exchange, queueName, key, queueType, handler, (d) => {
+    const data = decode(d);
+    console.log(data);
+    return data;
+  });
+}
+
+export async function subscribe<T>(
+  conn: amqp.ChannelModel,
+  exchange: string,
+  queueName: string,
+  routingKey: string,
+  simpleQueueType: SimpleQueueType,
+  handler: (data: T) => Promise<AckType> | AckType,
+  unmarshaller: (data: Buffer) => T,
+): Promise<void> {
   let ch: amqp.ChannelModel;
 
   let queue: amqp.QueueModel;
@@ -115,18 +150,18 @@ export async function subscribeJSON<T>(
       conn,
       exchange,
       queueName,
-      key,
-      queueType,
+      routingKey,
+      simpleQueueType,
     );
   } catch (err) {
     console.error(err);
   }
+
   await ch.consume(queue, async (message: amqp.ConsumeMessage | null) => {
     if (!message) return;
 
-    const buf = message.content.toString("utf8");
-    const json = JSON.parse(buf);
-    const result = await handler(json);
+    const data = unmarshaller(message.content);
+    const result = await handler(data);
 
     switch (result) {
       case AckType.Ack:

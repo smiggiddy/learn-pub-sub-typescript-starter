@@ -19,10 +19,12 @@ import { handlePause } from "../internal/gamelogic/pause.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
 import {
   AckType,
+  SimpleQueueType,
   declareAndBind,
   publishJSON,
   subscribeJSON,
   publishMsgPack,
+  subsribeMsgPack,
 } from "../internal/pubsub/api.js";
 import {
   ArmyMovesPrefix,
@@ -183,14 +185,14 @@ async function main() {
       ExchangePerilTopic,
       `${ArmyMovesPrefix}.${username}`,
       `${ArmyMovesPrefix}.*`,
-      "transient",
+      SimpleQueueType.transient,
     );
     await declareAndBind(
       conn,
       ExchangePerilTopic,
       `${WarRecognitionsPrefix}`,
       `${WarRecognitionsPrefix}.*`,
-      "durable",
+      SimpleQueueType.durable,
     );
   } catch (err) {
     console.error(`Error creating queue`, err);
@@ -200,7 +202,7 @@ async function main() {
     ExchangePerilTopic,
     `${ArmyMovesPrefix}.${username}`,
     `${ArmyMovesPrefix}.*`,
-    "transient",
+    SimpleQueueType.transient,
     handlerMove(gs, ch),
   );
 
@@ -209,7 +211,7 @@ async function main() {
     ExchangePerilTopic,
     `${WarRecognitionsPrefix}`,
     `${WarRecognitionsPrefix}.*`,
-    "durable",
+    SimpleQueueType.durable,
     handlerWar(gs, ch),
   );
   await subscribeJSON(
@@ -217,7 +219,7 @@ async function main() {
     ExchangePerilDirect,
     `${PauseKey}.${username}`,
     PauseKey,
-    "transient",
+    SimpleQueueType.transient,
     handlerPause(gs),
   );
 
