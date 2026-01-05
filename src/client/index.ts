@@ -5,45 +5,34 @@ import {
   printClientHelp,
   commandStatus,
   printQuit,
+  getMaliciousLog,
 } from "../internal/gamelogic/gamelogic.js";
-import {
-  GameState,
-  type PlayingState,
-} from "../internal/gamelogic/gamestate.js";
-import {
-  commandMove,
-  handleMove,
-  MoveOutcome,
-} from "../internal/gamelogic/move.js";
-import { handlePause } from "../internal/gamelogic/pause.js";
+import { GameState } from "../internal/gamelogic/gamestate.js";
+import { commandMove } from "../internal/gamelogic/move.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
 import {
-  AckType,
   SimpleQueueType,
   declareAndBind,
   publishJSON,
   subscribeJSON,
   publishMsgPack,
-  subsribeMsgPack,
 } from "../internal/pubsub/api.js";
 import {
   ArmyMovesPrefix,
   ExchangePerilDirect,
   ExchangePerilTopic,
-  ExchangePerilDlq,
   PauseKey,
   WarRecognitionsPrefix,
   GameLogSlug,
 } from "../internal/routing/routing.js";
 
-import type {
-  ArmyMove,
-  Player,
-  RecognitionOfWar,
-} from "../internal/gamelogic/gamedata.js";
-import { handleWar, WarOutcome } from "../internal/gamelogic/war.js";
-
 import type { GameLog } from "../internal/gamelogic/logs.js";
+import {
+  handlerPause,
+  handlerMove,
+  handlerWar,
+  SpamHandler,
+} from "../internal/handlers/handlers.js";
 
 export function publishGameLog(
   ch: ConfirmChannel,
@@ -58,112 +47,6 @@ export function publishGameLog(
   return publishMsgPack(ch, ExchangePerilTopic, `${GameLogSlug}.${player}`, gl);
 }
 
-function handlerPause(gs: GameState): (ps: PlayingState) => AckType {
-  return (ps: PlayingState) => {
-    handlePause(gs, ps);
-    process.stdout.write("> ");
-    return AckType.Ack;
-  };
-}
-
-function handlerWar(
-  gs: GameState,
-  ch: ConfirmChannel,
-): (war: RecognitionOfWar) => Promise<AckType> {
-  return async (war: RecognitionOfWar): Promise<AckType> => {
-    try {
-      const outcome = handleWar(gs, war);
-
-      switch (outcome.result) {
-        case WarOutcome.NotInvolved:
-          return AckType.NackRequeue;
-        case WarOutcome.NoUnits:
-          return AckType.NackDiscard;
-        case WarOutcome.OpponentWon:
-          try {
-            publishGameLog(
-              ch,
-              `${outcome.winner} won a war against ${outcome.loser}`,
-              gs.getUsername(),
-            );
-            return AckType.Ack;
-          } catch (err) {
-            console.log(`error: ${err}`);
-            return AckType.NackRequeue;
-          }
-        case WarOutcome.YouWon:
-          try {
-            publishGameLog(
-              ch,
-              `${outcome.winner} won a war against ${outcome.loser}`,
-              gs.getUsername(),
-            );
-            return AckType.Ack;
-          } catch (err) {
-            console.log(`error: ${err}`);
-            return AckType.NackRequeue;
-          }
-        case WarOutcome.Draw:
-          try {
-            publishGameLog(
-              ch,
-              `A war between ${outcome.attacker} and ${outcome.defender} resulted in a draw`,
-              gs.getUsername(),
-            );
-            return AckType.Ack;
-          } catch (err) {
-            console.log(`error: ${err}`);
-            return AckType.NackRequeue;
-          }
-        default:
-          const unreachable: never = outcome;
-          console.log(`error unreachable: ${unreachable}`);
-          return AckType.NackRequeue;
-      }
-    } finally {
-      process.stdout.write("> ");
-    }
-  };
-}
-
-function handlerMove(
-  gs: GameState,
-  ch: ConfirmChannel,
-): (ps: PlayingState) => AckType {
-  return async (move: ArmyMove): Promise<AckType> => {
-    try {
-      const outcome = handleMove(gs, move);
-      switch (outcome) {
-        case MoveOutcome.Safe:
-          return AckType.Ack;
-        case MoveOutcome.MakeWar:
-          const recongition: RecognitionOfWar = {
-            attacker: move.player,
-            defender: gs.getPlayerSnap(),
-          };
-
-          try {
-            await publishJSON(
-              ch,
-              ExchangePerilTopic,
-              `${WarRecognitionsPrefix}.${gs.getUsername()}`,
-              recongition,
-            );
-            return AckType.Ack;
-          } catch (err) {
-            console.error("Error publishing war recognition", err);
-            return AckType.NackRequeue;
-          }
-
-        default:
-          return AckType.NackDiscard;
-      }
-    } finally {
-      process.stdout.write("> ");
-    }
-  };
-}
-
 async function main() {
   const rabbitConnString =
     process.env.NODE_ENV === "local"
@@ -172,6 +55,18 @@ async function main() {
   console.log("Starting Peril client...");
 
   const conn = await amqp.connect(rabbitConnString);
+
+  process.on("SIGINT", () => {
+    conn.close();
+    console.log("RabbitMQ Connection Closed");
+    process.exit(0);
+  });
+  process.on("SIGINT", () => {
+    conn.close();
+    console.log("RabbitMQ Connection Closed");
+    process.exit(0);
+  });
+
   const ch = await conn.createConfirmChannel();
   const username = await clientWelcome();
 
@@ -256,6 +151,11 @@ async function main() {
         stopGame = true;
         break;
       case "spam":
+        if (input.length < 2) {
+          console.log("please enter spam with a valid length");
+          continue;
+        }
+        SpamHandler(ch, Number(input[1]), gs.getUsername());
         continue;
       default:
         console.log("enter a valid command");
@@ -264,6 +164,7 @@ async function main() {
     }
   }
   if (stopGame) {
+    await conn.close();
     process.exit(0);
   }
 }

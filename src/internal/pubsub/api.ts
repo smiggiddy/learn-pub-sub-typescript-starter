@@ -157,6 +157,7 @@ export async function subscribe<T>(
     console.error(err);
   }
 
+  await ch.prefetch(10);
   await ch.consume(queue, async (message: amqp.ConsumeMessage | null) => {
     if (!message) return;
 

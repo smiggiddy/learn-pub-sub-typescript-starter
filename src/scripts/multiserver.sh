@@ -25,7 +25,7 @@ trap 'cleanup' SIGINT
 
 # Start the specified number of instances of the program in the background
 for (( i=0; i<num_instances; i++ )); do
-  npx tsx ./src/server/index.ts &
+  NODE_ENV=local npx tsx ./src/server/index.ts &
   pids+=($!)
 done
 
